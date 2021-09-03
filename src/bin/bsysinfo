@@ -1,0 +1,23 @@
+#!/bin/bash
+
+# Return a string containing the system information about threads,
+# total ram and accelerated gpu info separated by comma (csv)
+function bsysinfo()
+{
+  local totalThreads=$(nproc --all)
+  local totalRam=$(grep MemTotal /proc/meminfo | awk '{print int($2/1024/1000)/2*2}')
+  local totalVideoCards=''
+  if command -v nvidia-smi &> /dev/null
+  then
+    totalVideoCards=$(nvidia-smi -q | grep -E 'Product Name' | sed -e's/  */ /g' | cut -d' ' -f 5- | paste -sd "," -)
+  fi
+  local totalDisks=$(lsblk -io KNAME,TYPE,SIZE,MODEL | grep disk | awk '{print $3 " " $1}' | paste -sd "," -)
+
+  if [[ -z "totalVideoCards" ]]; then
+    totalVideoCards="None Accelerated"
+  fi
+
+  echo "\"$totalThreads Threads\",\"$totalRam GB RAM\",\"$totalVideoCards GPU(s)\",\"$totalDisks Disk(s)\""
+}
+
+bsysinfo

@@ -1,0 +1,46 @@
+#!/bin/bash
+
+# Unpack the resource under the cache.
+#
+# first argument: full path of tar.gx resource (/data/app/maya/2019/data-package.tar.gz)
+# second argument: resource full location (/data/app/maya/2019)
+# third argument: cache location
+# fourth argument: the full path for the tracking file created for the resource
+function unpackResource()
+{
+  local resourcePackage=$1
+  local resourceLocation=$2
+  local cacheLocation=$3
+  local cacheTracking=$4
+
+  local targetCacheLocation="$cacheLocation/$resourceLocation"
+  local resourceTrackingName=$(echo "$resourceLocation" | sed 's/\//|/g')
+  local cacheLocationTracking="$cacheLocation/resources"
+
+  # getting the uncompressed size of the resource
+  local resourceSize=$(gzip -l "$resourcePackage" | tail -1 | awk '{print $2}')
+
+  # making sure the resource tracking directory ax
+  mkdir -p $(dirname "$cacheTracking")
+  echo "$resourceSize" > "$cacheTracking"
+
+  # we let this file open for any user to update it
+  chmod 775 "$cacheTracking"
+
+  # creating required directories if needed
+  mkdir -p "$targetCacheLocation.unpacking"
+
+  # using pigz (parallel implementation of gzip) when available
+  if [ -x "$(command -v pigz)" ]; then
+    tar --use-compress-program=pigz -xvf "$resourcePackage" -C "$targetCacheLocation.unpacking" >/dev/null 2>&1
+  else
+    tar -zxvf "$resourcePackage" -C "$targetCacheLocation.unpacking" >/dev/null 2>&1
+  fi
+
+  # when unpacking is done we rename it to be available atomically
+  mv "$targetCacheLocation.unpacking" "$targetCacheLocation"
+
+  echo $targetCacheLocation
+}
+
+unpackResource $1 $2 $3 $4

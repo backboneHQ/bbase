@@ -1,0 +1,31 @@
+#!/bin/bash
+
+# Returns resolved full path for a resource under BACKBONE_PATH
+#
+# first argument: resource relative location (app/maya/$BVER_MAYA_VERSION)
+function locateResource()
+{
+  local resource=$1
+  local locations=$(echo $BACKBONE_PATH | tr ":" "\n")
+  local foundLocation=""
+  for location in $locations
+  do
+    if [[ -d "$location" ]] && [[ -e "$location/$resource" ]]; then
+      foundLocation="$location/$resource"
+      break
+    fi
+  done
+
+  # in case the resource was not localized showing it as stderr
+  if [ -z "$foundLocation" ]; then
+    echo "Could not locate resource \"$resource\" under \$BACKBONE_PATH" >&2
+  # returning path from cache
+  elif [ -n "$BACKBONE_CACHE" ] && [ -d "$foundLocation" ]; then
+    echo $(cres "$foundLocation" "$resource" "$BACKBONE_CACHE")
+  # otherwise returning the valid path
+  else
+    echo "$foundLocation"
+  fi
+}
+
+locateResource $1

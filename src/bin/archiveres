@@ -1,0 +1,26 @@
+#!/bin/bash
+
+# Create an archive for the input path
+#
+# first argument: input path
+function arquiveRes()
+{
+  local archiveLocation=$(readlink -e $1)
+  local archiveTarGz="$(dirname $archiveLocation)/$(basename $archiveLocation).tar.gz"
+
+  if [[ -d "$archiveLocation" ]]; then
+    cd $archiveLocation
+    if [[ -f "$archiveTarGz" ]]; then
+      rm $archiveTarGz
+    fi
+
+    # creating tar.gz
+    tar cvzf $archiveTarGz -C `pwd` $(ls -A)
+
+    echo "DONE: $archiveTarGz"
+  else
+    echo "Error, invalid directory: $archiveLocation" 2>&1
+  fi
+}
+
+arquiveRes $1

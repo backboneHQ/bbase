@@ -1,0 +1,216 @@
+#!/bin/bash
+
+# similar to "cd command" with the addition of sourcing potential
+# config scripts which can be defined at any level of the path. This
+# makes possible to have custom scripts that are loaded from
+# the root to the leaf (enabling overrides). By default it
+# looks at <PATH_LEVEL>/resources/config file (driven by the
+# env BCD_RES_CONFIG_LOCATION).
+function bcd()
+{
+  builtin cd "$@" || return;
+
+  local resourceConfigVerbose="$BCD_RES_CONFIG_VERBOSE"
+  if [[ -z "$resourceConfigVerbose" ]]; then
+    resourceConfigVerbose='1'
+  fi
+
+  local resourceConfigLocation="$BCD_RES_CONFIG_LOCATION"
+  if [[ -z "$resourceConfigLocation" ]]; then
+    resourceConfigLocation="resources/config"
+  fi
+
+  local resolvedPath=""
+  IFS="/" read -ra PARTS <<< "$(pwd)"
+  for i in "${PARTS[@]}"
+  do
+    # skipping empty levels
+    if [[ "$i" == '' ]]; then
+      continue
+    fi
+
+    resolvedPath+="/$i"
+    local resourceConfigFullPath="$resolvedPath/$resourceConfigLocation"
+    if [[ -f "$resourceConfigFullPath" ]]; then
+
+      # verbose mode
+      if [[ "$resourceConfigVerbose" == '1' ]]; then
+        echo  "Loading: $resourceConfigFullPath"
+      fi
+
+      source $resourceConfigFullPath
+    fi
+  done
+}
+
+# ./init should be sourced after ./env.
+# This allows users to override any backbone environment vars established by
+# ./env, thereby customizing their running environment. Users should export vars
+# after ./env is sourced, but before ./init is sourced by their login scripts.
+# The Backbone vars that are set in advance with ./env include:
+# BACKBONE_PATH, BSYS_VERSION, BVER_VERSION, BLAUNCHER_VERSION...
+if [ -z "$BACKBONE_PATH" ]; then
+  echo "BACKBONE_PATH IS NOT DEFINED, DID YOU SOURCE 'bbase/env' file ?" >&2
+else
+  # current dir
+  dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+  # by default the version of the core depedencies is driven by their
+  # respective version environment. However, when bbase version is
+  # set to "stable", "beta", "alpha" it can be used to drive the
+  # default version of core depedencies (in case their version has not
+  # been assigned explicitly such as BVER_VERSION="0.1.0" previously). Also,
+  # if the target of a core dependency is a symlink it is going to extract
+  # the version assigned used as target of the symlink. This is necessary
+  # to ensure the environment is going to be the same, no matter what. Therefore,
+  # any changes in symlinks aka "stable", "beta", "alpha" is not going to
+  # affect the current environment.
+  autoAssignTypes="stable beta alpha"
+  bashVersionType=$BBASE_VERSION
+  declare -A coreDirectory
+  coreDirectory=(["main"]="$BACKBONE_CORE_MAIN" ["config"]="$BACKBONE_CORECONFIG_MAIN/$BACKBONE_CORE_CONFIG")
+  for coreKind in "${!coreDirectory[@]}";
+  do
+    coreVarIdentifier=""
+    if ! [[ "$coreKind" == "main" ]]; then
+      coreVarIdentifier="_${coreKind^^}"
+    fi
+
+    for core in $BBASE_CORE_DEPENDENCIES "bbase";
+    do
+      coreVersionName="${core^^}${coreVarIdentifier}_VERSION"
+      coreVersionValue="${!coreVersionName}"
+
+      # when bash version is assigned with stable, beta, alpha and the core does not
+      # have a value assigned to it.
+      if [[ -z "$coreVersionValue" && "$autoAssignTypes" == *"$bashVersionType"* ]]; then
+        coreVersionValue=$bashVersionType
+      fi
+
+      # we also want to resolve the version of bbase itself, but we don't need
+      # to look for it
+      if [[ "$core" == "bbase" ]]; then
+        coreTarget="$dir"
+
+      # looking for core targets
+      else
+        # looking for the core first under the backbone root (root repository), if it
+        # is not there yet then try to find it using locres (in case it's a module that
+        # is still under development)
+        coreTarget="$BACKBONE_ROOT/${coreDirectory[$coreKind]}/$core/$coreVersionValue"
+
+        if ! [[ -d "$coreTarget" ]]; then
+          # in case the module is not release yet under BACKBONE_ROOT, make sure you
+          # have the symlinks "alpha, beta and stable" for the dev module.
+          coreTarget=$( locres "${coreDirectory[$coreKind]}/$core/$coreVersionValue" 2> /dev/null )
+        fi
+      fi
+
+      # additionally, if core target is a symlink, lets assign the target
+      # rather than keeping a symlink that may change...
+      # The target symlink can also be another symlink aka alpha pointing
+      # to beta and beta pointing to stable, handling that behaviour
+      if [[ -z "$coreTarget" ]]; then
+        continue
+      fi
+      for symlinkPointingTo in $autoAssignTypes;
+      do
+        if [[ -L "$coreTarget" && -d "$coreTarget" ]]; then
+          coreVersionValue=$(readlink "$coreTarget")
+          coreVersionValue=$(basename "$coreVersionValue")
+        fi
+
+        # when found version is not a symlink, stopping it
+        coreTarget="$(dirname $coreTarget )/$coreVersionValue"
+        if ! [[ -L "$coreTarget" && -d "$coreTarget" ]]; then
+          break
+        fi
+      done
+
+      # exporting the final version of the core variable
+      export "$coreVersionName"=$coreVersionValue
+    done
+  done
+
+  # running core initialization
+  declare -A coreDependencyOrder
+  for core in $BBASE_CORE_DEPENDENCIES;
+  do
+    coreVersionName="${core^^}_VERSION"
+    coreVersionValue="${!coreVersionName}"
+    coreLocationInfo=$(locres "${coreDirectory[main]}/$core/$coreVersionValue/info.json")
+    if [[ -f "$coreLocationInfo" ]]; then
+      initAfterDependency=$(cat "$coreLocationInfo" | jq -r ".depends")
+      if [[ "$initAfterDependency" == "null" || -z "$initAfterDependency" ]]; then
+        initAfterDependency="bbase"
+      fi
+      coreDependencyOrder["$initAfterDependency"]+=" $core"
+    fi
+  done
+
+  # figuring out the order from which the core depedencies should be initialized
+  # this is done by looking at "depends" inside of info.json in each dependency.
+  goNext="bbase"
+  while :
+  do
+    current=$(echo $goNext | cut -d' ' -f1)
+    goNext=$(echo $goNext | cut -d' ' -f2-)
+    if [[ "$goNext" == "$current" ]]; then
+      goNext=""
+    fi
+
+    # in case there is nothing else to be done
+    if [[ -z "$current" && -z "$goNext" ]]; then
+      break
+    else
+      goNext+=" ${coreDependencyOrder[$current]}"
+    fi
+
+    # figuring out if the core has a configuration associated with it.
+    # When thas is the case the environment "<CORE>_CONFIG_ROOT" is
+    # exported.
+    # Configurations can have pre and post inialization scripts which are sourced
+    # in between the core initalization.
+    coreConfigName="${current^^}_CONFIG_VERSION"
+    coreConfigValue="${!coreConfigName}"
+    configLocation=$(locres "${coreDirectory[config]}/$current/$coreConfigValue/config" 2> /dev/null)
+    if [[ ! -z "$coreConfigValue" && -d "$configLocation" ]]; then
+
+      # exporting an environment that points to the root location of the configuration
+      export "${current^^}_CONFIG_ROOT"="$configLocation"
+
+      # in case the configuration has a pre initalization script
+      configPreInitFile="$configLocation/preInit"
+      if [[ -d "$configLocation" && -f "$configPreInitFile" ]]; then
+        source $configPreInitFile
+      fi
+    fi
+
+    # initializing core
+    coreVersionName="${current^^}_VERSION"
+    coreVersionValue="${!coreVersionName}"
+    if [[ ! "$current" == "bbase" ]]; then
+      coreLocation=$(locres "${coreDirectory[main]}/$current/$coreVersionValue")
+      if [[ -d "$coreLocation" ]]; then
+
+        # sourcing the initalization of the core dependency
+        coreInit="$coreLocation/init"
+        if [ -f "$coreInit" ]; then
+          source $coreInit
+        fi
+
+        # in case the configuration has a post initalization script
+        configPostInit="$configLocation/postInit"
+        if [[ -d "$configLocation" && -f "$configPostInit" ]]; then
+          source $configPostInit
+        fi
+
+        # otherwise something went wrong...
+      else
+        echo "bbase error: $current could not be localized ($coreLocation)!" >&2
+      fi
+    fi
+  done
+  unset coreDirectory
+  unset coreDependencyOrder
+fi

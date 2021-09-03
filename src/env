@@ -1,0 +1,96 @@
+#!/bin/bash
+
+# prepares for the initialization of the backbone environment.
+# This file is expected to be sourced by the ~/.bashrc
+
+# checking if "jq" is available under the current system.
+if ! [ -x "$(command -v jq)" ]; then
+  echo 'ERROR "jq" IS NOT INSTALLED (https://stedolan.github.io/jq/download/).' >&2
+# checking if BACKBONE_ROOT has been defined
+elif [ -z "$BACKBONE_ROOT" ]; then
+  echo "BACKBONE_ROOT IS NOT DEFINED, ARE YOU UNDER BACKBONE ENV ?" >&2
+elif [ -z "$BACKBONE_CORE_CONFIG" ]; then
+  echo "BACKBONE_CORE_CONFIG IS NOT DEFINED, ARE YOU UNDER BACKBONE ENV ?" >&2
+else
+  # current dir
+  dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+  # default BACKBONE_PATH is based BACKBONE_ROOT
+  # (BACKBONE_DEV_ROOT is automatically prepended when running through devenv)
+  export BACKBONE_PATH="$BACKBONE_ROOT"
+
+  # location where core dependencies are localized under backbone
+  export BACKBONE_CORE_MAIN="core"
+  export BACKBONE_CORECONFIG_MAIN="core-config"
+
+  # development enviromnent support:
+  # First we give users an alias command "devenv" that launches a subshell where
+  # ISDEVENV=1 and we re-source .bashrc (and this file), resulting in a prompt cue
+  # like "[DEV][...]$" and prepending BACKBONE_DEV_ROOT to BACKBONE_PATH.
+  # The construct "bash init-file ..." allows us to remain in the subshell until exit.
+  alias devenv='bash --init-file <(echo "export ISDEVENV=1 && source $HOME/.bashrc")'
+
+  # This section normally only executes when a user runs 'devenv'. The default
+  # value for BACKBONE_PATH is previously set by ./env, but the user may have
+  # overridden this by exporting a custom BACKBONE_PATH. Therefore, when a user
+  # runs 'devenv' we use whatever is currently for BACKBONE_PATH and prepend the
+  # location of BACKBONE_DEV_ROOT to BACKBONE_PATH. Since 'devenv' re-sources this file
+  # via ~/.bashrc, we can keep any Backbone environment tweaks the user has done as
+  # well as prepending BACKBONE_DEV_ROOT and modifying their shell prompt.
+  if [[ "$ISDEVENV" == "1" ]]; then
+    export BACKBONE_PATH="$BACKBONE_DEV_ROOT:$BACKBONE_PATH"
+    # adding [DEV] to the shell prompt as a reminder that we are in dev environment
+    export PS1="[DEV]$PS1"
+  fi
+
+  # Adding BBASE_BIN_PATH to the environment and prepending it to PATH, but only
+  # if the version of Bbase we are running now is different than when the user's
+  # BBASE_BIN_PATH was last set. We don't want to keep prepending BBASE_BIN_PATH
+  # for new shells if the Bbase version hasn't changed.
+  bbaseBinPath="$dir/bin"
+  if ! [[ "$BBASE_BIN_PATH" == "$bbaseBinPath" && "$PATH" == "$BBASE_BIN_PATH:$PATH" ]]; then
+    export BBASE_BIN_PATH=$bbaseBinPath
+    export PATH="$BBASE_BIN_PATH:$PATH"
+  fi
+
+  # collecting all the dependency names through the BACKBONE_PATH.
+  declare -A coreNames
+  for backbonePath in $(echo $BACKBONE_PATH | tr ":" "\n" | tac);
+  do
+    if ! [[ -d $backbonePath ]]; then
+      continue
+    fi
+
+    for backboneItemPath in $backbonePath/$BACKBONE_CORE_MAIN/*;
+    do
+      if ! [[ -d $backboneItemPath ]]; then
+        continue
+      fi
+
+      coreBaseName=$(basename $backboneItemPath)
+      if ! [[ "$coreBaseName" == "bbase" ]]; then
+        coreNames[$coreBaseName]=$backboneItemPath
+      fi
+    done
+  done
+
+  export BBASE_CORE_DEPENDENCIES=${!coreNames[@]}
+  unset coreNames
+
+  # cleaning up the environments related with versions of core dependencies.
+  # In case the user does not override them (between env and init) the init
+  # is going to figure out their versions.
+  for core in ${BBASE_CORE_DEPENDENCIES^^};
+  do
+    coreConfigVersion="${core}_CONFIG_VERSION"
+    coreVersion="${core}_VERSION"
+
+    if ! [[ -z "${!coreConfigVersion}" ]]; then
+      unset "$coreConfigVersion"
+    fi
+
+    if ! [[ -z "${!coreVersion}" ]]; then
+      unset "$coreVersion"
+    fi
+  done
+fi

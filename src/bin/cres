@@ -1,0 +1,55 @@
+#!/bin/bash
+
+# Return a path under the cached location.
+# In case the resource does not exist and there is a data-package.tar.gz
+# available under the resource location it does the unpacking
+# under the cache location. Otherwise, it returns the second argument.
+#
+# first argument: resource relative location (app/maya/2019)
+# second argument: resource full location (/data/app/maya/2019)
+# third argument: cache location
+function cachedResource()
+{
+  local resourceResolvedLocation=$1
+  local resourceLocation=$2
+  local cacheLocation=$3
+
+  local resourcePackage="$resourceResolvedLocation.tar.gz"
+  local targetCacheLocation="$cacheLocation/$resourceLocation"
+  local trackingName=$(echo "$resourceLocation" | sed 's/\//|/g')
+  local cacheTracking="$cacheLocation/resources/$trackingName"
+
+  if [ -n "$cacheLocation" ] && [ -f "$resourcePackage" ]; then
+    # wait for it in case there is already an unpacking going on or if the cache already exists
+    if [ -d "$resourcePackage.unpacking" ] || [ -d "$targetCacheLocation" ]; then
+      while [ -d "$resourcePackage.unpacking" ]
+      do
+	sleep 0.1
+      done
+
+      # returning cached location
+      echo "$targetCacheLocation"
+
+    # unpacking resource
+    else
+      # resolving cache as software user, so any file created by the cache
+      # is going to have the proper user
+      if [ -n "$BACKBONE_SOFTWARE_USER" ]; then
+	local currentDir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+	echo $(su $BACKBONE_SOFTWARE_USER -c ./$currentDir/ures "$resourcePackage" "$resourceLocation" "$cacheLocation" "$cacheTracking")
+      else
+	echo $(ures "$resourcePackage" "$resourceLocation" "$cacheLocation" "$cacheTracking")
+      fi
+    fi
+
+    # updating the time in the file that keeps tracking from the cached resource.
+    # (later used to purge resources that are no longer in usage)
+    touch "$cacheTracking"
+
+  # otherwise if there is no data-package we return the original resolved location location
+  else
+    echo "$resourceResolvedLocation"
+  fi
+}
+
+cachedResource $1 $2 $3

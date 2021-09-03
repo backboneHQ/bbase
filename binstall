@@ -1,0 +1,118 @@
+#!/bin/bash
+
+# showing help
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+  echo "$(basename "$0") [-h] -- Runs the installation:
+    -h/--help      show this help text
+    --production   installs as production release (under BACKBONE_ROOT). Otherwise, if not supplied installs under BACKBONE_DEV_ROOT (default)
+    --clean        purges the data used for building both production and development releases"
+  exit 0
+fi
+
+# purging caches
+if [[ $* == *--clean* ]]; then
+  if [[ -d "build-production" ]]; then
+    rm -r "build-production"
+  fi
+
+  if [[ -d "build-dev" ]]; then
+    rm -r "build-dev"
+  fi
+  exit 0
+fi
+
+# reading info.json
+name=$(grep -Po "\"name\": *\K\"[^\"]*\"" info.json | cut -d '"' -f 2)
+type=$(grep -Po "\"type\": *\K\"[^\"]*\"" info.json | cut -d '"' -f 2)
+version=$(grep -Po "\"version\": *\K\"[^\"]*\"" info.json | cut -d '"' -f 2)
+if [[ -z "$type" || -z "$name" || -z "$version" ]]; then
+  echo "Error, missing type, name or version from info.json"
+  exit 1
+fi
+targetSuffixPath="$type/$name/$version"
+
+# production release
+if [[ $* == *--production* ]]; then
+  # making sure BACKBONE_ROOT is defined
+  if [[ -z $BACKBONE_ROOT ]]; then
+    echo "BACKBONE_ROOT is not defined!"
+    exit 1
+  fi
+
+  # checking if deployment user is defined
+  if [[ -z $BACKBONE_DEPLOY_USER ]]; then
+    echo "BACKBONE_DEPLOY_USER is not defined!"
+    exit 1
+  fi
+
+  # checking if deployment user is defined
+  if [[ -z $BACKBONE_DEPLOY_GROUP ]]; then
+    echo "BACKBONE_DEPLOY_GROUP is not defined!"
+    exit 1
+  fi
+
+  # showing a prompt confirmation to avoid mistakes
+  read -r -p "Are you sure you want to run the production release? [y/N] " response
+  if [[ "$response" =~ ^(yes|y)$ ]]; then
+
+    # running installation
+    target="$BACKBONE_ROOT/$targetSuffixPath"
+    if [[ -e "$target" ]]; then
+      echo "Cannot override an existent production release: $target"
+      exit 1
+    fi
+
+    # preparing build
+    if [[ ! -d "build-production" ]]; then
+      mkdir "build-production"
+    else
+      make clean
+    fi
+
+    # building production release in a temporary directory.
+    # This is used to set the permissions before moving it
+    # to the production production
+    cd "build-production"
+    temporaryOutput=$(mktemp -d)
+    cmake -DCMAKE_BUILD_TYPE="release" -DCMAKE_INSTALL_PREFIX="$temporaryOutput/$targetSuffixPath" ..
+    make all install
+    sudo chown -R $BACKBONE_DEPLOY_USER:$BACKBONE_DEPLOY_GROUP $temporaryOutput
+    sudo chmod o-rwx,g-w,g+r -R $temporaryOutput
+
+    # skipping directory levels that are already created
+    # under production area
+    existingTargetLevels=""
+    for targetLevel in $(echo $targetSuffixPath | tr "/" "\n"); do
+      existingTargetLevels="$existingTargetLevels/$targetLevel"
+      if ! [[ -d "$BACKBONE_ROOT/$existingTargetLevels" ]]; then
+        break
+      fi
+    done
+
+    # moving to production area
+    sudo mv $temporaryOutput/$existingTargetLevels/ $BACKBONE_ROOT/$existingTargetLevels/
+    echo "Production deployment completed: $target"
+
+    # getting rid of the temporary output directory
+    sudo rm -rf $temporaryOutput
+  fi
+
+# development release
+else
+
+  # making sure BACKBONE_DEV_ROOT is defined
+  if [[ -z $BACKBONE_DEV_ROOT ]]; then
+    echo "BACKBONE_DEV_ROOT is not defined"
+    exit 1
+  fi
+
+  # preparing build
+  if [[ ! -d "build-dev" ]]; then
+    mkdir "build-dev"
+  fi
+  cd "build-dev"
+
+  # running installation
+  cmake -DCMAKE_BUILD_TYPE="dev" -DCMAKE_INSTALL_PREFIX="$BACKBONE_DEV_ROOT/$targetSuffixPath" ..
+  make all install
+fi
