@@ -159,18 +159,24 @@ class VersionManagerWindow(QtWidgets.QMainWindow):
                             continue
 
                         versions.append(
-                            [versionName] +
-                            list(
-                                map(
-                                    lambda x: x.zfill(10) if x.isdigit() else x,
-                                    versionName.split('.')
+                            [
+                                versionName,
+                                # creating an auxiliary padded list of versions that we are gonna
+                                # use later for sorting
+                                '.'.join(
+                                    map(
+                                        lambda x: x.zfill(10) if x.isdigit() else x,
+                                        versionName.split('.')
+                                    )
                                 )
-                            )
+                            ]
                         )
 
                     releaseVersionCombobox.addItems(
+                        # pyside expects a list type...
                         list(
-                            map(lambda x: x[0], sorted(versions, reverse=True))
+                            # adding versions by making sure the latest versions are on top
+                            map(lambda x: x[0], sorted(versions, key=lambda y: y[1], reverse=True))
                         )
                     )
 
