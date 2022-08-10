@@ -1,4 +1,4 @@
-cmake_minimum_required (VERSION 2.8)
+cmake_minimum_required (VERSION 3.23)
 
 project (bbase NONE)
 set (CMAKE_INSTALL_MESSAGE LAZY)

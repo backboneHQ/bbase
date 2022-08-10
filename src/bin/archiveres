@@ -6,18 +6,33 @@
 function arquiveRes()
 {
   local archiveLocation=$(readlink -e $1)
-  local archiveTarGz="$(dirname $archiveLocation)/$(basename $archiveLocation).tar.gz"
+  local archiveTarGz="$archiveLocation/barchive.tar.gz"
+  local archiveChecksum="$archiveLocation/barchive.checksum"
 
   if [[ -d "$archiveLocation" ]]; then
-    cd $archiveLocation
+    cd "$archiveLocation"
     if [[ -f "$archiveTarGz" ]]; then
-      rm $archiveTarGz
+      command rm "$archiveTarGz"
+    fi
+
+    if [[ -f "$archiveChecksum" ]]; then
+      command rm "$archiveChecksum"
     fi
 
     # creating tar.gz
-    tar cvzf $archiveTarGz -C `pwd` $(ls -A)
+    SAVEIFS=IFS
+    IFS=$(echo -en "\n\b")
+    tar czf $archiveTarGz -C `pwd` $(ls -A)
+    IFS=$SAVEIFS
 
-    echo "DONE: $archiveTarGz"
+    # creating checksum
+    if [[ -f "$archiveTarGz" ]]; then
+      echo "Computing checksum..."
+      md5sum "$archiveTarGz" | awk '{ print "md5 "$1 }' >| "$archiveChecksum"
+      echo "DONE: $archiveTarGz"
+    else
+      echo "Error, failed during the archive creation: $archiveTarGz" 2>&1
+    fi
   else
     echo "Error, invalid directory: $archiveLocation" 2>&1
   fi

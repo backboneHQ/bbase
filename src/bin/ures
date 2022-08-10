@@ -2,45 +2,131 @@
 
 # Unpack the resource under the cache.
 #
-# first argument: full path of tar.gx resource (/data/app/maya/2019/data-package.tar.gz)
-# second argument: resource full location (/data/app/maya/2019)
-# third argument: cache location
-# fourth argument: the full path for the tracking file created for the resource
+# first argument: full path of tar.gx resource (/data/app/maya/2019/barchive.tar.gz)
+# second argument: full path for the checksum file (/data/app/maya/2019/barchive.checksum)
+# third argument: resource relative path location (app/maya/2019/linux)
+# fourth argument: cache location
+# fifth argument: the full path for the tracking file created for the resource
+# sixth argument: the full path for the unpacking directory (temporary directory used for extraction)
+# seventh argument: the full path for the unpacking lock file
 function unpackResource()
 {
   local resourcePackage=$1
-  local resourceLocation=$2
-  local cacheLocation=$3
-  local cacheTracking=$4
+  local resourceChecksum=$2
+  local resourceLocation=$3
+  local cacheLocation=$4
+  local cacheTracking=$5
+  local cacheUnpackingDirectory=$6
+  local cacheUnpackingLock=$7
 
   local targetCacheLocation="$cacheLocation/$resourceLocation"
   local resourceTrackingName=$(echo "$resourceLocation" | sed 's/\//|/g')
   local cacheLocationTracking="$cacheLocation/resources"
-
-  # getting the uncompressed size of the resource
-  local resourceSize=$(gzip -l "$resourcePackage" | tail -1 | awk '{print $2}')
+  local resourceSize=$(stat --printf="%s" "$resourcePackage")
 
   # making sure the resource tracking directory ax
   mkdir -p $(dirname "$cacheTracking")
-  echo "$resourceSize" > "$cacheTracking"
+
+  echo "$resourceSize" >| "$cacheTracking"
 
   # we let this file open for any user to update it
   chmod 775 "$cacheTracking"
 
   # creating required directories if needed
-  mkdir -p "$targetCacheLocation.unpacking"
+  mkdir -p "$cacheUnpackingDirectory"
 
-  # using pigz (parallel implementation of gzip) when available
-  if [ -x "$(command -v pigz)" ]; then
-    tar --use-compress-program=pigz -xvf "$resourcePackage" -C "$targetCacheLocation.unpacking" >/dev/null 2>&1
-  else
-    tar -zxvf "$resourcePackage" -C "$targetCacheLocation.unpacking" >/dev/null 2>&1
+  local extractionLog="$cacheUnpackingDirectory/unpacking.log"
+  local extractionCopyChecksum="$cacheUnpackingDirectory/unpackingCopy.checksum"
+  touch $cacheUnpackingLock
+  touch $extractionCopyChecksum
+
+  # copy and run checksum
+  local copiedPackageResource=""
+  if [ -f $resourceChecksum ]; then
+    copiedPackageResource="$cacheUnpackingDirectory/$(basename $resourcePackage)"
+    command cp $resourcePackage $copiedPackageResource &
+    pid=$!
+    local totalLabel=$(echo $resourceSize | numfmt --to=iec --format='%.2fB')
+    local currentProgressInterval="0"
+    local currentProgressTotal="0"
+    local progressIntervalTotal="20"
+    while true; do
+        touch -m $cacheUnpackingLock
+
+        if [[ "$BACKBONE_URES_VERBOSE" != "0" && "$currentProgressInterval" -ge "$progressIntervalTotal" && -f "$copiedPackageResource" ]]; then
+          currentProgressInterval="0"
+          local copiedLabel=$(stat --printf="%s" "$copiedPackageResource" | numfmt --to=iec --format='%.2fB')
+          >&2 echo "Downloading $resourceLocation: Downloaded $copiedLabel from $totalLabel total"
+        fi
+        currentProgressInterval=$(($currentProgressInterval+1))
+        currentProgressTotal=$(($currentProgressTotal+1))
+
+        kill -0 $pid 2> /dev/null || { break; }
+        sleep 0.5
+    done
+
+    if [[ "$BACKBONE_URES_VERBOSE" != "0" && "$currentProgressTotal" -ge "$progressIntervalTotal" && -f "$copiedPackageResource" ]]; then
+      currentProgressInterval="0"
+      local copiedLabel=$(stat --printf="%s" "$copiedPackageResource" | numfmt --to=iec --format='%.2fB')
+      >&2 echo "Downloading $resourceLocation: Downloaded $copiedLabel from $totalLabel total"
+    fi
+
+    local checksumType=$(cat $resourceChecksum | awk '{ print $1 }')
+    local checksumHash=$(cat $resourceChecksum | awk '{ print $2 }')
+
+    if [[ "md5" == $checksumType ]]; then
+      if [[ "$BACKBONE_URES_VERBOSE" != "0" && "$currentProgressTotal" -ge "$progressIntervalTotal" ]]; then
+          >&2 echo "Checking download $resourceLocation: This process may take a while"
+      fi
+
+      md5sum $copiedPackageResource | awk '{ print $1 }' >| $extractionCopyChecksum &
+      pid=$!
+      while true; do
+          touch -m $cacheUnpackingLock
+
+          kill -0 $pid 2> /dev/null || { break; }
+          sleep 0.5
+      done
+
+      if ! [[ "$checksumHash" == $(cat $extractionCopyChecksum) ]]; then
+        >&2 echo "Error, failed to match checksum for: $resourceLocation"
+        return
+      fi
+    else
+      >&2 echo "Error, invalid checksum hash type for: $resourceLocation"
+      return
+    fi
+
+    # assigning newly copied resource location
+    resourcePackage="$copiedPackageResource"
   fi
 
+  # beginning extraction
+  if [[ "$BACKBONE_URES_VERBOSE" != "0" && "$currentProgressTotal" -ge "$progressIntervalTotal" ]]; then
+      >&2 echo "Extracting $resourceLocation: This process may take a while"
+  fi
+  tar -zxvf "$resourcePackage" -C "$cacheUnpackingDirectory" >| $extractionLog &
+  pid=$!
+  while true; do
+      touch -m $cacheUnpackingLock
+
+      kill -0 $pid 2> /dev/null || { break; }
+      sleep 0.5
+  done
+
+  # removing local copied compressed file (no longer need after the extraction)
+  if [ -f "$copiedPackageResource" ]; then
+    command rm $copiedPackageResource
+  fi
+
+  # removing lock file
+  command rm $cacheUnpackingLock
+  command rm $extractionCopyChecksum
+
   # when unpacking is done we rename it to be available atomically
-  mv "$targetCacheLocation.unpacking" "$targetCacheLocation"
+  command mv "$cacheUnpackingDirectory" "$targetCacheLocation"
 
   echo $targetCacheLocation
 }
 
-unpackResource $1 $2 $3 $4
+unpackResource "$1" "$2" "$3" "$4" "$5" "$6" "$7"

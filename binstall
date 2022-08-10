@@ -1,23 +1,20 @@
 #!/bin/bash
 
+# auxiliary function to convert a path to the current os
+__normalizeOsPath() {
+  if [[ "$BSYS_OS" == "windows" ]]; then
+    echo $(cygpath -w "$1" | tr '\\' '/')
+  # posix
+  else
+    echo "$1"
+  fi
+}
+
 # showing help
 if [[ "$1" == "-h" || "$1" == "--help" ]]; then
   echo "$(basename "$0") [-h] -- Runs the installation:
     -h/--help      show this help text
-    --production   installs as production release (under BACKBONE_ROOT). Otherwise, if not supplied installs under BACKBONE_DEV_ROOT (default)
-    --clean        purges the data used for building both production and development releases"
-  exit 0
-fi
-
-# purging caches
-if [[ $* == *--clean* ]]; then
-  if [[ -d "build-production" ]]; then
-    rm -r "build-production"
-  fi
-
-  if [[ -d "build-dev" ]]; then
-    rm -r "build-dev"
-  fi
+    --production   installs as production release (under BACKBONE_ROOT). Otherwise, if not supplied installs under BACKBONE_DEV_ROOT (default)"
   exit 0
 fi
 
@@ -39,64 +36,30 @@ if [[ $* == *--production* ]]; then
     exit 1
   fi
 
-  # checking if deployment user is defined
-  if [[ -z $BACKBONE_DEPLOY_USER ]]; then
-    echo "BACKBONE_DEPLOY_USER is not defined!"
-    exit 1
-  fi
-
-  # checking if deployment user is defined
-  if [[ -z $BACKBONE_DEPLOY_GROUP ]]; then
-    echo "BACKBONE_DEPLOY_GROUP is not defined!"
-    exit 1
-  fi
-
+  if [[ "$BBASE_DEPLOYMENT_IGNORE_PROMPT" == "1" ]]; then
+    response="yes"
   # showing a prompt confirmation to avoid mistakes
-  read -r -p "Are you sure you want to run the production release? [y/N] " response
-  if [[ "$response" =~ ^(yes|y)$ ]]; then
+  else
+    read -r -p "Are you sure you want to run the production release? [y/N] " response
+  fi
 
+  if [[ "$response" =~ ^(yes|y)$ ]]; then
     # running installation
-    target="$BACKBONE_ROOT/$targetSuffixPath"
+    target=$(__normalizeOsPath "$BACKBONE_ROOT/$targetSuffixPath")
     if [[ -e "$target" ]]; then
       echo "Cannot override an existent production release: $target"
       exit 1
     fi
 
-    # preparing build
-    if [[ ! -d "build-production" ]]; then
-      mkdir "build-production"
-    else
-      make clean
-    fi
+    # Since this config lives on the server, creating a build directory
+    # on tmp for this module to speed-up things.
+    buildDirectory=$(__normalizeOsPath "$(mktemp --tmpdir -d $name-build-production.XXXXXXXXX)")
 
-    # building production release in a temporary directory.
-    # This is used to set the permissions before moving it
-    # to the production production
-    cd "build-production"
-    temporaryOutput=$(mktemp -d)
-    cmake -DCMAKE_BUILD_TYPE="release" -DCMAKE_INSTALL_PREFIX="$temporaryOutput/$targetSuffixPath" ..
-    make all install
-    sudo chown -R $BACKBONE_DEPLOY_USER:$BACKBONE_DEPLOY_GROUP $temporaryOutput
-    sudo chmod o-rwx,g-w,g+r -R $temporaryOutput
+    cmake -DCMAKE_INSTALL_PREFIX="$target" -B$buildDirectory
+    cmake --install $buildDirectory --prefix="$target"
 
-    # skipping directory levels that are already created
-    # under production area
-    existingTargetLevels=""
-    for targetLevel in $(echo $targetSuffixPath | tr "/" "\n"); do
-      existingTargetLevels="$existingTargetLevels/$targetLevel"
-      if ! [[ -d "$BACKBONE_ROOT/$existingTargetLevels" ]]; then
-        break
-      fi
-    done
-
-    # moving to production area
-    sudo mv $temporaryOutput/$existingTargetLevels/ $BACKBONE_ROOT/$existingTargetLevels/
     echo "Production deployment completed: $target"
-
-    # getting rid of the temporary output directory
-    sudo rm -rf $temporaryOutput
   fi
-
 # development release
 else
 
@@ -107,12 +70,10 @@ else
   fi
 
   # preparing build
-  if [[ ! -d "build-dev" ]]; then
-    mkdir "build-dev"
-  fi
-  cd "build-dev"
+  buildDirectory=$(__normalizeOsPath "$(mktemp --tmpdir -d $name-build-dev.XXXXXXXXX)")
+  target=$(__normalizeOsPath "$BACKBONE_DEV_ROOT/$targetSuffixPath")
 
   # running installation
-  cmake -DCMAKE_BUILD_TYPE="dev" -DCMAKE_INSTALL_PREFIX="$BACKBONE_DEV_ROOT/$targetSuffixPath" ..
-  make all install
+  cmake -DCMAKE_INSTALL_PREFIX="$target" -B$buildDirectory
+  cmake --install $buildDirectory --prefix="$target"
 fi

@@ -53,7 +53,11 @@ if [ -z "$BACKBONE_PATH" ]; then
   echo "BACKBONE_PATH IS NOT DEFINED, DID YOU SOURCE 'bbase/env' file ?" >&2
 else
   # current dir
-  dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+  if [[ -z "$1" ]]; then
+    dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+  else
+    dir="$1"
+  fi
 
   # by default the version of the core depedencies is driven by their
   # respective version environment. However, when bbase version is
@@ -98,11 +102,12 @@ else
         # is not there yet then try to find it using locres (in case it's a module that
         # is still under development)
         coreTarget="$BACKBONE_ROOT/${coreDirectory[$coreKind]}/$core/$coreVersionValue"
-
-        if ! [[ -d "$coreTarget" ]]; then
-          # in case the module is not release yet under BACKBONE_ROOT, make sure you
-          # have the symlinks "alpha, beta and stable" for the dev module.
-          coreTarget=$( locres "${coreDirectory[$coreKind]}/$core/$coreVersionValue" 2> /dev/null )
+        if [[ -z "$BACKBONE_ACTIVE_VERSIONS_CONFIG" ]]; then
+          if ! [[ -e "$coreTarget" ]]; then
+            # in case the module is not release yet under BACKBONE_ROOT, make sure you
+            # have the symlinks "alpha, beta and stable" for the dev module.
+            coreTarget=$( locres "${coreDirectory[$coreKind]}/$core/$coreVersionValue" )
+          fi
         fi
       fi
 
@@ -113,15 +118,31 @@ else
       if [[ -z "$coreTarget" ]]; then
         continue
       fi
-      for symlinkPointingTo in $autoAssignTypes;
+
+      for autoAssignType in $autoAssignTypes;
       do
-        if [[ -L "$coreTarget" && -d "$coreTarget" ]]; then
+        # looking for baked versions
+        if [[ ! -z "$BACKBONE_ACTIVE_VERSIONS_CONFIG" ]]; then
+          coreVersionValue=$(cat $BACKBONE_ACTIVE_VERSIONS_CONFIG | jq -r ".data.\"${coreDirectory[$coreKind]}/$core\".$autoAssignType.version")
+          if [[ $coreVersionValue == "null" ]]; then
+            coreVersionValue=""
+          fi
+          break
+        # in case of symlink
+        elif [[ -L "$coreTarget" && -d "$coreTarget" ]]; then
           coreVersionValue=$(readlink "$coreTarget")
           coreVersionValue=$(basename "$coreVersionValue")
+        # otherwise extract the version from the directory
+        elif [[ -d "$coreTarget" ]]; then
+          coreVersionValue=$(basename "$coreTarget")
+        # if the auto assign type is a file, lest read the contents
+        # of the file containing the version
+        elif [[ -f "$coreTarget" ]]; then
+          coreVersionValue=$(cat "$coreTarget")
         fi
 
         # when found version is not a symlink, stopping it
-        coreTarget="$(dirname $coreTarget )/$coreVersionValue"
+        coreTarget="$(dirname $coreTarget)/$coreVersionValue"
         if ! [[ -L "$coreTarget" && -d "$coreTarget" ]]; then
           break
         fi
@@ -138,9 +159,9 @@ else
   do
     coreVersionName="${core^^}_VERSION"
     coreVersionValue="${!coreVersionName}"
-    coreLocationInfo=$(locres "${coreDirectory[main]}/$core/$coreVersionValue/info.json")
+    coreLocationInfo="$(locres ${coreDirectory[main]}/$core/$coreVersionValue)/info.json"
     if [[ -f "$coreLocationInfo" ]]; then
-      initAfterDependency=$(cat "$coreLocationInfo" | jq -r ".depends")
+      initAfterDependency=$(cat "$coreLocationInfo" | jq -r ".depends" | tr -d '\r')
       if [[ "$initAfterDependency" == "null" || -z "$initAfterDependency" ]]; then
         initAfterDependency="bbase"
       fi
@@ -148,7 +169,8 @@ else
     fi
   done
 
-  # figuring out the order from which the core depedencies should be initialized
+
+  # figuring out the order from which the core dependencies should be initialized
   # this is done by looking at "depends" inside of info.json in each dependency.
   goNext="bbase"
   while :
@@ -167,19 +189,27 @@ else
     fi
 
     # figuring out if the core has a configuration associated with it.
-    # When thas is the case the environment "<CORE>_CONFIG_ROOT" is
+    # When that is the case the environment "<CORE>_CONFIG_ROOT" is
     # exported.
-    # Configurations can have pre and post inialization scripts which are sourced
-    # in between the core initalization.
+    # Configurations can have pre and post initialization scripts which are sourced
+    # in between the core initialization.
     coreConfigName="${current^^}_CONFIG_VERSION"
     coreConfigValue="${!coreConfigName}"
-    configLocation=$(locres "${coreDirectory[config]}/$current/$coreConfigValue/config" 2> /dev/null)
-    if [[ ! -z "$coreConfigValue" && -d "$configLocation" ]]; then
+    configLocation=""
 
+    # bbase is the bootstrap and does not have a config. All the other
+    # modules are expected to have their configs
+    if [[ "$current" != 'bbase' ]]; then
+      configLocation=$(locres "${coreDirectory[config]}/$current/$coreConfigValue")
+      if [[ ! -z "$configLocation" ]]; then
+        configLocation="$configLocation/config"
+      fi
+    fi
+    if [[ ! -z "$coreConfigValue" && -d "$configLocation" ]]; then
       # exporting an environment that points to the root location of the configuration
       export "${current^^}_CONFIG_ROOT"="$configLocation"
 
-      # in case the configuration has a pre initalization script
+      # in case the configuration has a pre initialization script
       configPreInitFile="$configLocation/preInit"
       if [[ -d "$configLocation" && -f "$configPreInitFile" ]]; then
         source $configPreInitFile

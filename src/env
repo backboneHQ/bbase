@@ -13,11 +13,15 @@ elif [ -z "$BACKBONE_CORE_CONFIG" ]; then
   echo "BACKBONE_CORE_CONFIG IS NOT DEFINED, ARE YOU UNDER BACKBONE ENV ?" >&2
 else
   # current dir
-  dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+  if [[ -z "$1" ]]; then
+    dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+  else
+    dir="$1"
+  fi
 
   # default BACKBONE_PATH is based BACKBONE_ROOT
   # (BACKBONE_DEV_ROOT is automatically prepended when running through devenv)
-  export BACKBONE_PATH="$BACKBONE_ROOT"
+  export BACKBONE_PATH="$BACKBONE_CACHE:$BACKBONE_ROOT"
 
   # location where core dependencies are localized under backbone
   export BACKBONE_CORE_MAIN="core"
@@ -28,7 +32,7 @@ else
   # ISDEVENV=1 and we re-source .bashrc (and this file), resulting in a prompt cue
   # like "[DEV][...]$" and prepending BACKBONE_DEV_ROOT to BACKBONE_PATH.
   # The construct "bash init-file ..." allows us to remain in the subshell until exit.
-  alias devenv='bash --init-file <(echo "export ISDEVENV=1 && source $HOME/.bashrc")'
+  alias devenv='bash --init-file <(echo "export ISDEVENV=1 && source \"$HOME/.bashrc\"")'
 
   # This section normally only executes when a user runs 'devenv'. The default
   # value for BACKBONE_PATH is previously set by ./env, but the user may have
@@ -43,14 +47,48 @@ else
     export PS1="[DEV]$PS1"
   fi
 
+  # figuring out the location of the bbase/bin that will be prepended to the path
+  bbaseBinPath="$dir/bin"
+  bbaseDevLocation="$BACKBONE_DEV_ROOT/core/bbase/$(basename $dir)"
+  if [[ "$ISDEVENV" == "1" && -d "$bbaseDevLocation" ]]; then
+    bbaseBinPath="$bbaseDevLocation/bin"
+  elif [[ ! -z "$BACKBONE_CACHE" ]]; then
+    bbaseCacheLocation="$BACKBONE_CACHE/core/bbase/$(basename $dir)"
+    if [[ -d "$bbaseCacheLocation" && ! -f "$bbaseCacheLocation/.completed" || ! -d "$bbaseCacheLocation" ]]; then
+      mkdir -p "$(dirname $bbaseCacheLocation)"
+      if [[ -d "$bbaseCacheLocation" ]]; then
+        command cp -r $dir $bbaseCacheLocation/../
+      else
+        command cp -r $dir $bbaseCacheLocation
+      fi
+      # with this file we know all the files have been copied (to avoid corruption)
+      touch "$bbaseCacheLocation/.completed"
+    fi
+    bbaseBinPath="$bbaseCacheLocation/bin"
+  fi
+
   # Adding BBASE_BIN_PATH to the environment and prepending it to PATH, but only
   # if the version of Bbase we are running now is different than when the user's
   # BBASE_BIN_PATH was last set. We don't want to keep prepending BBASE_BIN_PATH
   # for new shells if the Bbase version hasn't changed.
-  bbaseBinPath="$dir/bin"
   if ! [[ "$BBASE_BIN_PATH" == "$bbaseBinPath" && "$PATH" == "$BBASE_BIN_PATH:$PATH" ]]; then
     export BBASE_BIN_PATH=$bbaseBinPath
     export PATH="$BBASE_BIN_PATH:$PATH"
+  fi
+
+  # looking for a config file containing the active versions (this helps avoiding
+  # hits to the server to compute this information)
+  export BACKBONE_ACTIVE_VERSIONS_CONFIG=""
+  if [[ -f "$BACKBONE_ROOT/configs/bvermanager/active.json" ]]; then
+    # we are going to provide the location from where the active config
+    # was sourced from
+    export BACKBONE_ACTIVE_VERSIONS_ORIGIN_CONFIG="$BACKBONE_ROOT/configs/bvermanager/active.json"
+    if [[ ! -z "$BACKBONE_CACHE" ]]; then
+      command cp "$BACKBONE_ACTIVE_VERSIONS_ORIGIN_CONFIG" "$BACKBONE_CACHE/active.json"
+      export BACKBONE_ACTIVE_VERSIONS_CONFIG="$BACKBONE_CACHE/active.json"
+    else
+      export BACKBONE_ACTIVE_VERSIONS_CONFIG="$BACKBONE_ACTIVE_VERSIONS_ORIGIN_CONFIG"
+    fi
   fi
 
   # collecting all the dependency names through the BACKBONE_PATH.
@@ -61,13 +99,25 @@ else
       continue
     fi
 
-    for backboneItemPath in $backbonePath/$BACKBONE_CORE_MAIN/*;
+    backboneItemPaths=""
+    if [[ ! -z $BACKBONE_ACTIVE_VERSIONS_CONFIG && $backbonePath == "$BACKBONE_ROOT" ]]; then
+      backboneItemPaths=$(cat $BACKBONE_ACTIVE_VERSIONS_CONFIG | jq -r ".data | keys[]" | grep "$BACKBONE_CORE_MAIN/" | awk -v root=$BACKBONE_ROOT '{print root"/" $0}')
+    else
+      backboneItemPaths=$backbonePath/$BACKBONE_CORE_MAIN/*
+    fi
+
+    for backboneItemPath in $backboneItemPaths;
     do
-      if ! [[ -d $backboneItemPath ]]; then
+      if [[ -z "$BACKBONE_ACTIVE_VERSIONS_CONFIG" && ! -d $backboneItemPath ]]; then
         continue
       fi
 
       coreBaseName=$(basename $backboneItemPath)
+      # skipping already added names
+      if [ -v coreNames[$coreBaseName] ]; then
+        continue
+      fi
+
       if ! [[ "$coreBaseName" == "bbase" ]]; then
         coreNames[$coreBaseName]=$backboneItemPath
       fi

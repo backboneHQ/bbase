@@ -1,0 +1,214 @@
+#!/usr/bin/env bpython3
+
+import os
+import re
+import sys
+import json
+import subprocess
+from PySide2 import QtCore, QtWidgets, QtGui
+
+
+class BackboneSettingsDialog(QtWidgets.QDialog):
+    """
+    Backbone Settings Dialog.
+    """
+
+    __pipeSettingsFilePath = os.environ['BACKBONE_SETTINGS']
+    __releaseTypes = os.environ.get('BACKBONE_RELEASE_TYPES', 'alpha beta stable').split(' ')[::-1]
+    __userRegEx = '^[a-zA-Z0-9\.]{3,}$'
+
+    def __init__(self, showAdvanced=True, parent=None):
+        """
+        Create a settings dialog object.
+        """
+        super(BackboneSettingsDialog, self).__init__(parent)
+        settings = self.settings()
+
+        self.__userName = QtWidgets.QLineEdit(settings['user'])
+        self.__releaseType = QtWidgets.QComboBox()
+        self.__releaseType.addItems(self.__releaseTypes)
+        self.__releaseType.setCurrentText(settings['release'])
+
+        self.__root = QtWidgets.QLineEdit(settings['root'])
+        self.__devRoot = QtWidgets.QLineEdit(settings['devRoot'])
+        self.__coreConfig = QtWidgets.QLineEdit(settings['coreConfig'])
+
+        # hard drives
+        self.__cache = QtWidgets.QComboBox()
+        for driveLetter in self.hardDrives():
+            self.__cache.addItem(os.path.join(driveLetter, settings['cache'][2:]).replace('\\', '/'))
+        self.__cache.setCurrentText(settings['cache'].replace('\\', '/'))
+
+        layout = QtWidgets.QVBoxLayout()
+        basicGroup = QtWidgets.QGroupBox('Basic Settings')
+        basicLayout = QtWidgets.QFormLayout()
+        basicLayout.addRow('Username (firstName.lastName)', self.__userName)
+        basicGroup.setLayout(basicLayout)
+
+        advancedGroup = QtWidgets.QGroupBox('Advanced Settings (Caution invalid settings can break the system)')
+        advancedLayout = QtWidgets.QFormLayout()
+        pipeSettingsLabel = QtWidgets.QLabel(self.__pipeSettingsFilePath.replace('\\', '/'))
+        pipeSettingsLabel.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        advancedLayout.addRow('Pipe settings', pipeSettingsLabel)
+        advancedLayout.addRow('Release Type', self.__releaseType)
+        advancedLayout.addRow('Cache Location', self.__cache)
+        advancedLayout.addRow('Root', self.__root)
+        advancedLayout.addRow('Dev Root', self.__devRoot)
+        advancedLayout.addRow('Core Config', self.__coreConfig)
+        advancedGroup.setLayout(advancedLayout)
+        advancedGroup.setVisible(showAdvanced)
+
+        layout.addWidget(basicGroup)
+        layout.addSpacing(10)
+        layout.addWidget(advancedGroup)
+        layout.addStretch(100)
+
+        self.__saveButton = QtWidgets.QPushButton('Save')
+        self.__saveButton.clicked.connect(self.__onSaveSettings)
+        layout.addWidget(self.__saveButton)
+
+        # Set dialog layout
+        self.setLayout(layout)
+
+        self.setWindowTitle('Pipeline Settings')
+        self.resize(720, 200)
+
+    @classmethod
+    def hardDrives(cls):
+        """
+        Return a list containing the physical hard drive letters.
+        """
+        result = []
+        commandOutput = cls.__runSubProcessCommand('wmic volume list brief')
+        for index, line in enumerate(commandOutput[::-1]):
+            parts = list(filter(lambda x: len(x), line.split(' ')))
+            driveType = parts[2]
+            if driveType != 'NTFS':
+                continue
+
+            driveLetter = parts[-1].upper()
+            if ':' not in driveLetter:
+                continue
+
+            result.append(driveLetter)
+
+        return result
+
+    @classmethod
+    def settings(cls):
+        """
+        Return a dict containing the user settings.
+        """
+        if not os.path.exists(cls.__pipeSettingsFilePath):
+            QtWidgets.QMessageBox.information(
+                None,
+                "Backbone",
+                'Error, could not find: {}'.format(cls.__pipeSettingsFilePath)
+            )
+            return
+
+        result = {}
+        with open(cls.__pipeSettingsFilePath) as f:
+            result = json.load(f)
+
+        if result['user'].lower() == 'undefined':
+            result['user'] = ''
+
+        return result
+
+    @classmethod
+    def saveSettings(cls, settings):
+        """
+        Save the user settings.
+        """
+        if settings['user'].count('.') != 1 or not re.match(cls.__userRegEx, settings['user']):
+            QtWidgets.QMessageBox.information(
+                None,
+                "Backbone",
+                "Error, username expects the naming convention: first.last"
+            )
+            return False
+        elif not os.path.exists(settings['root']):
+            QtWidgets.QMessageBox.information(
+                None,
+                "Backbone",
+                "Error, Backbone root does not exist: {}".format(settings['root'])
+            )
+            return False
+        elif not settings['devRoot']:
+            QtWidgets.QMessageBox.information(
+                None,
+                "Backbone",
+                "Error, Backbone dev root cannot be empty"
+            )
+            return False
+        elif not settings['coreConfig']:
+            QtWidgets.QMessageBox.information(
+                None,
+                "Backbone",
+                "Error, Backbone core config cannot be empty"
+            )
+            return False
+
+        with open(cls.__pipeSettingsFilePath, 'w') as f:
+            json.dump(settings, f, indent=4, sort_keys=True)
+
+        QtWidgets.QMessageBox.information(
+            None,
+            "Backbone Settings",
+            "The changes will take effect next time you relaunch the pipeline."
+        )
+
+        return True
+
+    def __onSaveSettings(self):
+        """
+        Callback called to save the user settings.
+        """
+        settings = self.settings()
+        settings['user'] = self.__userName.text()
+        settings['cache'] = self.__cache.currentText()
+        settings['root'] = self.__root.text().replace('\\', '/')
+        settings['devRoot'] = self.__devRoot.text().replace('\\', '/')
+        settings['release'] = self.__releaseType.currentText()
+        settings['coreConfig'] = self.__coreConfig.text()
+
+        if self.saveSettings(settings):
+            self.close()
+
+    @classmethod
+    def __runSubProcessCommand(cls, command=list[str]) -> list[str]:
+        """
+        Run a subprocess and return a sanitized output.
+        """
+        return list(
+            filter(lambda x: len(x), map(str.strip, subprocess.check_output(
+                command
+            ).decode('utf-8').replace('\r', '').split('\n')))
+        )
+
+if __name__ == '__main__':
+    app = QtWidgets.QApplication(sys.argv)
+    app.setStyle(QtWidgets.QStyleFactory.create('Fusion'))
+
+    # dark palette
+    palette = QtGui.QPalette()
+    palette.setColor(QtGui.QPalette.Window, QtGui.QColor(43, 43, 43))
+    palette.setColor(QtGui.QPalette.WindowText, QtCore.Qt.white)
+    palette.setColor(QtGui.QPalette.Base, QtGui.QColor(25, 25, 25))
+    palette.setColor(QtGui.QPalette.AlternateBase, QtGui.QColor(53, 53, 53))
+    palette.setColor(QtGui.QPalette.ToolTipBase, QtCore.Qt.black)
+    palette.setColor(QtGui.QPalette.ToolTipText, QtCore.Qt.white)
+    palette.setColor(QtGui.QPalette.Text, QtCore.Qt.white)
+    palette.setColor(QtGui.QPalette.Button, QtGui.QColor(53, 53, 53))
+    palette.setColor(QtGui.QPalette.ButtonText, QtCore.Qt.white)
+    palette.setColor(QtGui.QPalette.BrightText, QtCore.Qt.red)
+    palette.setColor(QtGui.QPalette.Link, QtGui.QColor(42, 130, 218))
+    palette.setColor(QtGui.QPalette.Highlight, QtGui.QColor(42, 130, 218))
+    palette.setColor(QtGui.QPalette.HighlightedText, QtCore.Qt.black)
+    app.setPalette(palette)
+
+    # parsing no advanced option
+    showAdvanced = '--noadvanced' not in map(lambda x: x.lower(), sys.argv)
+
+    sys.exit(BackboneSettingsDialog(showAdvanced).exec_())
