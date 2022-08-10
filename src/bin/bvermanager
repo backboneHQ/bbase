@@ -2,9 +2,10 @@
 
 import sys
 import os
+import time
 import json
-import subprocess
-import tempfile
+import shutil
+import argparse
 import functools
 import getpass
 from glob import glob
@@ -16,23 +17,21 @@ class VersionManagerWindow(QtWidgets.QMainWindow):
     Interface used to manager versions under backbone.
     """
 
-    __noChangeColor = '#555'
+    __noChangeColor = 'rgba(100, 100, 100, 150)'
     __releaseTypes = OrderedDict(
         alpha={
-            'color': '#9e4d4d',
+            'color': 'rgba(59, 102, 123, 255)',
         },
         beta={
-            'color': '#9e944d',
+            'color': 'rgba(59, 102, 123, 255)',
         },
         stable={
-            'color': '#4d9e52',
+            'color': 'rgba(59, 102, 123, 255)',
         }
     )
 
-    __deployUser = os.environ.get('BACKBONE_DEPLOY_USER', '')
     __backboneRoot = os.environ.get('BACKBONE_ROOT', '')
-    __backboneDevRoot = os.environ.get('BACKBONE_DEV_ROOT', '')
-    __backboneCoreConfig = os.environ.get('BACKBONE_CORE_CONFIG', '')
+    __backboneReleaseTypes = os.environ.get('BACKBONE_RELEASE_TYPES', ' '.join(__releaseTypes.keys()))
     __backboneConfigDirectory = os.path.join(__backboneRoot, 'configs', 'bvermanager', 'releases')
 
     def __init__(self):
@@ -41,6 +40,8 @@ class VersionManagerWindow(QtWidgets.QMainWindow):
         """
         super(VersionManagerWindow, self).__init__()
 
+        self.__headerLabel = QtWidgets.QLabel()
+        self.__headerLabel.setVisible(False)
         scrollArea = QtWidgets.QScrollArea()
         scrollArea.setFocusPolicy(QtCore.Qt.NoFocus)
         scrollArea.setWidgetResizable(True)
@@ -51,9 +52,11 @@ class VersionManagerWindow(QtWidgets.QMainWindow):
         scrollContainer.setLayout(scrollLayout)
         scrollArea.setWidget(scrollContainer)
 
+        layout.addWidget(self.__headerLabel)
         layout.addWidget(scrollArea)
 
         contentLayout = QtWidgets.QGridLayout()
+        contentLayout.setSpacing(0)
 
         self.__versions = {}
         self.__enableCoreCheckBoxes = {}
@@ -66,7 +69,7 @@ class VersionManagerWindow(QtWidgets.QMainWindow):
             corePath = os.path.normpath(corePath)
             coreVersions[corePath] = []
             for coreVersionPath in glob(os.path.join(corePath, '*')):
-                if os.path.isdir(coreVersionPath) or os.path.islink(coreVersionPath) and not os.path.exists(coreVersionPath):
+                if os.path.basename(coreVersionPath) in self.__releaseTypes.keys() or os.path.isdir(coreVersionPath) or os.path.islink(coreVersionPath) and not os.path.exists(coreVersionPath):
                     coreVersions[corePath].append(coreVersionPath)
 
         for index, coreVersionPath in enumerate(['ALL'] + sorted(coreVersions.keys())):
@@ -74,12 +77,10 @@ class VersionManagerWindow(QtWidgets.QMainWindow):
             itemName = coreVersionPath[len(self.__backboneRoot) + 1:] if index > 0 else coreVersionPath
 
             itemFirstLayout = QtWidgets.QVBoxLayout()
-            itemFirstLayout.setContentsMargins(0, 8, 10, 0)
+            itemFirstLayout.setContentsMargins(0, 0, 0, 0)
             itemFirstLayout.setSpacing(0)
             itemNameCheckBox = QtWidgets.QCheckBox(itemName)
-            itemFont = QtGui.QFont()
-            itemFont.setBold(True)
-            itemNameCheckBox.setFont(itemFont)
+            itemNameCheckBox.setStyleSheet("border-top: 2px solid #222; padding-top: 9px; padding-right: 10px")
             itemNameCheckBox.setCheckState(QtCore.Qt.Checked)
 
             itemNameCheckBox.stateChanged.connect(functools.partial(self.__onChangedCoreVersionToggle, coreVersionPath))
@@ -89,28 +90,35 @@ class VersionManagerWindow(QtWidgets.QMainWindow):
 
             bumpVersionsButtons = QtWidgets.QPushButton('Bump')
             bumpVersionsButtons.clicked.connect(functools.partial(self.__onBumpVersions, coreVersionPath))
+            bumpVersionsButtons.setVisible(False)
             itemFirstLayout.addWidget(bumpVersionsButtons)
+            itemFirstLayout.addStretch()
             bumpVersionsButtons.setDisabled(True)
 
             contentLayout.addLayout(itemFirstLayout, index, 0)
             contentLayout.setColumnStretch(0, 0)
 
             for releaseTypeIndex, releaseType in enumerate(self.__releaseTypes.keys()):
+                if releaseType not in self.__backboneReleaseTypes:
+                    continue
 
                 releaseVersionLayout = QtWidgets.QVBoxLayout()
                 releaseFrame = QtWidgets.QFrame()
                 releaseFrame.setObjectName('releaseFrame')
                 releaseFrame.setStyleSheet(
-                    "QFrame#releaseFrame {background: <color>; border: 0; border-radius: 8px}".replace(
+                        "QFrame#releaseFrame {background: <color>; border-radius: 0px; border: 2px solid #222; border-right: none; border-bottom: none}".replace(
                         "<color>",
                         self.__noChangeColor
                     )
                 )
                 releaseFrame.setLayout(releaseVersionLayout)
 
-                releaseLabel = QtWidgets.QLabel(releaseType)
+                releaseLabel = QtWidgets.QLabel("{} STREAM".format(releaseType.upper()))
+                releaseLabel.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+                releaseLabel.setAlignment(QtCore.Qt.AlignCenter)
                 releaseFont = QtGui.QFont()
-                releaseFont.setPointSize(8)
+                releaseFont.setPointSize(9)
+                releaseFont.setBold(True)
                 releaseLabel.setFont(releaseFont)
 
                 releaseVersionLayout.addWidget(
@@ -122,16 +130,18 @@ class VersionManagerWindow(QtWidgets.QMainWindow):
 
                 if itemName == 'ALL':
                     bumpVersionsButtons.setDisabled(False)
-                    loadButtonLabel = "Load latest"
-                    if releaseType == 'alpha':
-                        loadButton = QtWidgets.QPushButton('Load latest')
-                        loadButton.setFlat(True)
-                    else:
-                        loadButtonLabel = 'Load from {0}'.format(
+                    loadButtonLabel = "Load latest versions available"
+                    if not self.__backboneReleaseTypes.startswith(releaseType):
+                        loadButtonLabel = 'Load versions from {0}'.format(
                             list(self.__releaseTypes.keys())[releaseTypeIndex - 1]
                         )
 
                     loadButton = QtWidgets.QPushButton(loadButtonLabel)
+
+                    itemFont = QtGui.QFont()
+                    itemFont.setBold(False)
+                    loadButton.setFont(itemFont)
+
                     releaseVersionLayout.addWidget(
                         loadButton
                     )
@@ -153,7 +163,11 @@ class VersionManagerWindow(QtWidgets.QMainWindow):
                         versionName = os.path.basename(versionPath)
 
                         if releaseType == versionName:
-                            releaseVersion = os.readlink(versionPath)
+                            if os.path.isdir(versionPath) and os.path.islink(versionPath):
+                                releaseVersion = os.readlink(versionPath)
+                            elif os.path.isfile(versionPath):
+                                with open(versionPath) as f:
+                                    releaseVersion = f.read().strip()
 
                         if versionName in self.__releaseTypes.keys():
                             continue
@@ -165,7 +179,7 @@ class VersionManagerWindow(QtWidgets.QMainWindow):
                                 # use later for sorting
                                 '.'.join(
                                     map(
-                                        lambda x: x.zfill(10) if x.isdigit() else x,
+                                        lambda x: x.zfill(10) if x.isdigit() else '{}{}'.format('0'* 10, x),
                                         versionName.split('.')
                                     )
                                 )
@@ -181,7 +195,11 @@ class VersionManagerWindow(QtWidgets.QMainWindow):
                     )
 
                     if releaseVersion:
-                        releaseLabel.setText("{}: {}".format(releaseType, releaseVersion))
+                        releaseLabel.setAlignment(QtCore.Qt.AlignLeft)
+                        releaseFont = QtGui.QFont()
+                        releaseFont.setPointSize(8)
+                        releaseLabel.setFont(releaseFont)
+                        releaseLabel.setText("current: {}".format(releaseVersion))
                         if releaseVersion not in map(lambda x: x[0], versions):
                             releaseVersionCombobox.addItem(releaseVersion)
                         releaseVersionCombobox.setCurrentText(releaseVersion)
@@ -204,29 +222,30 @@ class VersionManagerWindow(QtWidgets.QMainWindow):
         actionAreaLayout = QtWidgets.QHBoxLayout()
 
         rollbackButton = QtWidgets.QPushButton('Rollback/History')
+        itemFont = QtGui.QFont()
+        itemFont.setBold(True)
+        rollbackButton.setFont(itemFont)
+
         self.__rollbackMenu = QtWidgets.QMenu()
+        action = self.__rollbackMenu.addAction('Print releases directory')
+        action.triggered.connect(self.__onPrintReleasesDirectory)
+
         releases = glob(os.path.join(self.__backboneConfigDirectory, '*.json'))
         releases.sort(reverse=True)
-        for release in releases:
-            action = self.__rollbackMenu.addAction(os.path.splitext(os.path.basename(release))[0])
+
+        versionsLimit = 50
+        versionsMenu = self.__rollbackMenu.addMenu('Versions (latest {})'.format(versionsLimit))
+        for release in releases[:versionsLimit]:
+            action = versionsMenu.addAction(os.path.splitext(os.path.basename(release))[0])
             action.triggered.connect(functools.partial(self.__onLoadRelease, release))
 
         rollbackButton.setMenu(self.__rollbackMenu)
         actionAreaLayout.addWidget(rollbackButton)
 
-        runButton = QtWidgets.QPushButton('Run/Try')
-        self.__runMenu = QtWidgets.QMenu()
-        for coreConfigName in os.listdir(os.path.join(self.__backboneRoot, 'core-config')):
-            coreConfigMenu = self.__runMenu.addMenu(coreConfigName)
-            for releaseType in self.__releaseTypes.keys():
-                action = coreConfigMenu.addAction(releaseType)
-                action.triggered.connect(functools.partial(self.__onRun, releaseType, coreConfigName))
-        runButton.setMenu(self.__runMenu)
-        actionAreaLayout.addWidget(runButton)
-
         deployButton = QtWidgets.QPushButton('Deploy')
+        deployButton.setFont(itemFont)
         deployButton.setIcon(deployButton.style().standardIcon(QtWidgets.QStyle.SP_ArrowForward))
-        deployButton.clicked.connect(self.__onDeploy)
+        deployButton.clicked.connect(self.deploy)
         actionAreaLayout.addWidget(deployButton)
 
         layout.addLayout(actionAreaLayout)
@@ -234,7 +253,67 @@ class VersionManagerWindow(QtWidgets.QMainWindow):
         placeHolder.setLayout(layout)
         self.setCentralWidget(placeHolder)
         self.setWindowTitle("Backbone Version Manager")
-        self.resize(800, 820)
+        self.resize(1024, 768)
+
+    def upgrade(self, specificReleaseType=None):
+        """
+        Upgrade all versions to the latest version.
+        """
+        for releaseType in self.releaseTypes():
+            if specificReleaseType is None or releaseType.lower() == specificReleaseType.lower():
+                self.__loadLatest(releaseType)
+
+    def deploy(self):
+        """
+        Perform the deployment procedure of the active versions.
+        """
+        reply = QtWidgets.QMessageBox.question(self, "Backbone", "Are you sure you want to deploy the new versions?", QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No, QtWidgets.QMessageBox.No)
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+
+        output = {
+            'configVersion': 1,
+            'createdUser': os.environ.get('BACKBONE_USER', getpass.getuser()),
+            'data': {}
+        }
+
+        hasModification = False
+        for versionPath in self.__versions.keys():
+            versionRelative = versionPath[len(self.__backboneRoot) + 1:].replace('\\', '/')
+            output['data'][versionRelative] = {}
+            for releaseType, data in self.__versions[versionPath].items():
+                currentValue = self.__versions[versionPath][releaseType]['combobox'].currentText()
+                originalValue = self.__versions[versionPath][releaseType]['originalVersion']
+                output['data'][versionRelative][releaseType] = {
+                    'version': currentValue,
+                    'previousVersion': originalValue if currentValue != originalValue else None
+                }
+                if currentValue != originalValue:
+                    hasModification = True
+
+        if not hasModification:
+            QtWidgets.QMessageBox.critical(self, 'Backbone version manager', 'No modifications found, deployment aborted!')
+            return
+
+        # running deployment
+        self.__applyDeployment(output)
+
+        QtWidgets.QMessageBox.information(self, 'Backbone version manager', 'Deployment completed!')
+        self.close()
+
+    @classmethod
+    def releaseTypes(cls):
+        """
+        Return a list of backbone release stream names.
+        """
+        return cls.__backboneReleaseTypes.split(' ')
+
+    def __onPrintReleasesDirectory(self):
+        """
+        Callback called when Print releases directory is triggered.
+        """
+        sys.stdout.write("{}\n".format(self.__backboneConfigDirectory.replace('\\', '/')))
+        sys.stdout.flush()
 
     def __onLoadRelease(self, release):
         """
@@ -244,71 +323,29 @@ class VersionManagerWindow(QtWidgets.QMainWindow):
         with open(release) as f:
             configuration = json.load(f)
 
+        self.__headerLabel.setText(
+            "Loaded release {} created by {} at {}".format(
+                os.path.basename(release),
+                configuration['createdUser'],
+                time.strftime('%d-%m-%Y %H:%M', time.gmtime(os.path.getmtime(release)))
+            )
+        )
+
         for versionPath, releaseTypes in configuration['data'].items():
             for releaseType, versionData in releaseTypes.items():
-                versionTypeFullPath = os.path.join(self.__backboneRoot, versionPath)
-                if versionTypeFullPath not in self.__versions:
+                versionTypeFullPath = os.path.normpath(os.path.join(self.__backboneRoot, versionPath))
+                notFound = True
+                for versionPath in self.__versions:
+                    if os.path.normpath(versionPath) == versionTypeFullPath:
+                        notFound = False
+                        break
+                if notFound:
                     continue
 
+                if releaseType not in self.__backboneReleaseTypes:
+                    continue
                 self.__versions[versionTypeFullPath][releaseType]['combobox'].setCurrentText(versionData['version'])
-
-    def __onRun(self, releaseType, coreConfigName):
-        """
-        Callback called when run/try is triggered.
-        """
-        backboneSession = [
-            'export BACKBONE_ROOT="{}"'.format(self.__backboneRoot),
-            'export BACKBONE_DEV_ROOT="{}"'.format(self.__backboneDevRoot),
-            'export BACKBONE_CORE_CONFIG="{}"'.format(os.path.join(self.__backboneCoreConfig, coreConfigName))
-        ]
-
-        coreVars = []
-        for versionPath in self.__versions.keys():
-
-            isCoreConfig = versionPath.startswith(os.path.join(self.__backboneRoot, self.__backboneCoreConfig))
-            if isCoreConfig and os.path.basename(os.path.dirname(versionPath)) != coreConfigName:
-                continue
-
-            name = os.path.basename(versionPath)
-            currentValue = self.__versions[versionPath][releaseType]['combobox'].currentText()
-            coreVars.append(
-                'export {}{}_VERSION="{}"'.format(name.upper(), '_CONFIG' if isCoreConfig else '', currentValue)
-            )
-
-        backboneSession += coreVars
-
-        backboneSession += [
-            'export BACKBONE_CACHE=""',
-            'source $BACKBONE_ROOT/core/bbase/$BBASE_VERSION/env',
-        ]
-
-        backboneSession += coreVars
-
-        backboneSession.append(
-            'source $BACKBONE_ROOT/core/bbase/$BBASE_VERSION/init'
-        )
-
-        subprocess.Popen(
-            [
-                'gnome-terminal',
-                '--',
-                'bash',
-                '--norc',
-                '--noprofile',
-                '-c',
-                '{}; bash --norc --noprofile'.format(';'.join(backboneSession))
-            ],
-            env={
-                'DISPLAY': os.environ.get('DISPLAY', ''),
-                'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin',
-                'USER': os.environ['USER'],
-                'HOME': os.environ['HOME'],
-                'PROMPT_COMMAND': 'echo -en "\033]0;{} ({}): $("pwd")  \a"'.format(releaseType, coreConfigName),
-                'SHELL': os.environ.get('SHELL', ''),
-                'XDG_RUNTIME_DIR': os.environ.get('XDG_RUNTIME_DIR', '')
-            },
-            close_fds=False
-        )
+        self.__headerLabel.setVisible(True)
 
     def __onChangedCoreVersionToggle(self, coreVersionPath, value):
         """
@@ -330,6 +367,7 @@ class VersionManagerWindow(QtWidgets.QMainWindow):
         """
         Callback called when version combobox is triggered.
         """
+        self.__headerLabel.setVisible(False)
         data = self.__versions[coreVersionPath][releaseType]
 
         color = self.__releaseTypes[releaseType]['color']
@@ -337,7 +375,7 @@ class VersionManagerWindow(QtWidgets.QMainWindow):
             color = self.__noChangeColor
 
         data['releaseFrame'].setStyleSheet(
-                "QFrame#releaseFrame {background: <color>; border: 0; border-radius: 8px}".replace(
+                "QFrame#releaseFrame {background: <color>; border-radius: 0px; border: 2px solid #222; border-right: none; border-bottom: none }".replace(
                 "<color>",
                 color
             )
@@ -347,6 +385,7 @@ class VersionManagerWindow(QtWidgets.QMainWindow):
         """
         Callback called when bump version button is triggered.
         """
+        self.__headerLabel.setVisible(False)
         if coreVersionPath == 'ALL':
             for versionPath in self.__enableCoreCheckBoxes.keys():
                 if versionPath == 'ALL':
@@ -366,78 +405,71 @@ class VersionManagerWindow(QtWidgets.QMainWindow):
         self.__versions[coreVersionPath]['beta']['combobox'].setCurrentText(alphaVersion)
         self.__versions[coreVersionPath]['stable']['combobox'].setCurrentText(betaVersion)
 
-    def __onDeploy(self):
+    def __applyDeployment(self, outputData):
         """
-        Callback called when deploy button is triggered.
+        Run the deployment making the versions active in backbone.
         """
-        deployConformation = QtWidgets.QInputDialog(self)
-        if not self.__deployUser:
-            QtWidgets.QMessageBox.critical(self, 'Backbone version manager', 'Deployment user not defined!')
-            return
+        releases = []
+        if os.path.exists(self.__backboneConfigDirectory):
+            releases = glob(os.path.join(self.__backboneConfigDirectory, '*.json'))
+            releases.sort(reverse=True)
+        else:
+            os.makedirs(self.__backboneConfigDirectory)
 
-        password = deployConformation.getText(self, 'Deployment', 'Sudo password:', QtWidgets.QLineEdit.Password)
-        if not password[0] or not password[1]:
-            return
-        password = password[0]
+        if not releases:
+            releases.append('0.json')
 
-        output = {
-            'configVersion': 1,
-            'createdUser': getpass.getuser(),
-            'data': {}
-        }
+        version = str(int(os.path.splitext(os.path.basename(releases[0]))[0]) + 1).zfill(4)
+        outputFile = os.path.join(self.__backboneConfigDirectory, "{}.json".format(version))
+        activeFile = os.path.join(os.path.dirname(self.__backboneConfigDirectory), "active.json")
+        with open(outputFile, 'w') as f:
+            f.write(
+                json.dumps(
+                    outputData,
+                    sort_keys=True,
+                    indent=4
+                )
+            )
+        shutil.copyfile(outputFile, activeFile)
 
-        hasModification = False
-        for versionPath in self.__versions.keys():
-            versionRelative = versionPath[len(self.__backboneRoot) + 1:]
-            output['data'][versionRelative] = {}
-            for releaseType, data in self.__versions[versionPath].items():
-                currentValue = self.__versions[versionPath][releaseType]['combobox'].currentText()
-                originalValue = self.__versions[versionPath][releaseType]['originalVersion']
-                output['data'][versionRelative][releaseType] = {
-                    'version': currentValue,
-                    'previousVersion': originalValue if currentValue != originalValue else None
-                }
-                if currentValue != originalValue:
-                    hasModification = True
+        for versionPath, releaseTypes in outputData['data'].items():
+            for releaseType, versionData in releaseTypes.items():
+                versionTypeFullPath = os.path.join(self.__backboneRoot, versionPath, releaseType)
+                version = versionData['version']
+                isSymlink = os.path.islink(versionTypeFullPath)
 
-        if not hasModification:
-            QtWidgets.QMessageBox.critical(self, 'Backbone version manager', 'No modifications found, deployment aborted!')
-            return
+                # no need to update symlink when version is the same
+                if isSymlink and os.readlink(versionTypeFullPath) == version and os.path.isdir(versionTypeFullPath):
+                    continue
+                # also no need to update when version file is the same
+                elif os.path.isfile(versionTypeFullPath):
+                    with open(versionTypeFullPath) as f:
+                        if f.read().strip() == version:
+                            continue
 
-        # creating a temporary file passed next
-        f = tempfile.NamedTemporaryFile(mode='wt', delete=False)
-        f.write(json.dumps(output))
-        f.close()
-        os.chmod(f.name, 0o777)
+                # setting release message
+                sys.stdout.write('Setting release {} to version {}\n'.format(
+                        versionTypeFullPath.replace('\\', '/'),
+                        version
+                    )
+                )
 
-        p = subprocess.Popen(
-            "echo {password} | sudo -Su {user} --preserve-env sh -c 'cat {jsonFile} | {executableFile}'".format(
-                user=self.__deployUser,
-                password=password,
-                executableFile="{}/bvermanagerdeploy".format(os.path.dirname(os.path.abspath(__file__))),
-                jsonFile=f.name
-            ),
-            shell=True
-        )
-
-        p.communicate()
-
-        # removing temporary file
-        os.remove(f.name)
-        QtWidgets.QMessageBox.information(self, 'Backbone version manager', 'Deployment completed!')
-
-        self.close()
+                # when version does not match we need to remove
+                # the current symlink so a new one can be created
+                if isSymlink:
+                    os.remove(versionTypeFullPath)
+                    os.symlink(version, versionTypeFullPath)
+                elif os.path.isfile(versionTypeFullPath):
+                    with open(versionTypeFullPath, 'w') as f:
+                        f.write(version)
 
     def __loadVersions(self, releaseType):
         """
         Callback called when load release versions button is triggered.
         """
         # latest versions
-        if releaseType == 'alpha':
-            for versionPath in self.__versions.keys():
-                data = self.__versions[versionPath][releaseType]
-                if data['combobox'].isEnabled():
-                    data['combobox'].setCurrentIndex(0)
+        if self.__backboneReleaseTypes.startswith(releaseType):
+            self.__loadLatest(releaseType)
             return
 
         source = 'alpha' if releaseType == 'beta' else 'beta'
@@ -446,9 +478,48 @@ class VersionManagerWindow(QtWidgets.QMainWindow):
             if data['combobox'].isEnabled():
                 data['combobox'].setCurrentIndex(self.__versions[versionPath][source]['combobox'].currentIndex())
 
+    def __loadLatest(self, releaseType):
+        """
+        Load the latest version for the input release type.
+        """
+        for versionPath in self.__versions.keys():
+            data = self.__versions[versionPath][releaseType]
+            if data['combobox'].isEnabled():
+                data['combobox'].setCurrentIndex(0)
+
+
+# command help
+parser = argparse.ArgumentParser(
+    add_help=True,
+    description='Manages backbone versions'
+)
+
+parser.add_argument(
+    '--upgrade',
+    default=False,
+    action="store_true",
+    help='Upgrades all versions under the alpha, beta, stable streams to the latest versions.'
+)
+
+for releaseType in VersionManagerWindow.releaseTypes():
+    parser.add_argument(
+        '--upgrade-{}'.format(releaseType),
+        default=False,
+        action="store_true",
+        help='Upgrades all versions under the {} stream to the latest versions.'.format(releaseType)
+    )
+
+parser.add_argument(
+    '--deploy',
+    default=False,
+    action="store_true",
+    help='This flag can be used in conjunction with --upgrade flags to execute deploy procedure.'
+)
 
 if __name__ == '__main__':
+    args, unknownArgs = parser.parse_known_args()
     app = QtWidgets.QApplication(sys.argv)
+    app.setStyle(QtWidgets.QStyleFactory.create('Fusion'))
 
     # dark palette
     palette = QtGui.QPalette()
@@ -469,4 +540,19 @@ if __name__ == '__main__':
 
     window = VersionManagerWindow()
     window.show()
+
+    # upgrading versions
+    if args.upgrade:
+        window.upgrade()
+    else:
+        for releaseType in VersionManagerWindow.releaseTypes():
+            value = getattr(args, 'upgrade_{}'.format(releaseType))
+            if not value:
+                continue
+            window.upgrade(releaseType)
+
+    # run deployment
+    if args.deploy:
+        window.deploy()
+
     sys.exit(app.exec_())

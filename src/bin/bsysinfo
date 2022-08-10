@@ -9,15 +9,25 @@ function bsysinfo()
   local totalVideoCards=''
   if command -v nvidia-smi &> /dev/null
   then
-    totalVideoCards=$(nvidia-smi -q | grep -E 'Product Name' | sed -e's/  */ /g' | cut -d' ' -f 5- | paste -sd "," -)
+    totalVideoCards=$(nvidia-smi -q | grep -E 'Product Name' | sed -e's/  */ /g' | cut -d' ' -f 5- | paste -sd "," - | tr -d '\r')
   fi
-  local totalDisks=$(lsblk -io KNAME,TYPE,SIZE,MODEL | grep disk | awk '{print $3 " " $1}' | paste -sd "," -)
+
+  if [[ "$(uname -s)" == CYGWIN* ]]; then
+    local totalDisks=$(cat /proc/partitions | grep ":" | awk '{print substr($5, 1, 2), int($3/1024/1024),"GB"}' | paste -sd "," -)
+  else
+    local totalDisks=$(lsblk -io KNAME,TYPE,SIZE,MODEL | grep disk | awk '{print $3 " " $1}' | paste -sd "," -)
+  fi
 
   if [[ -z "totalVideoCards" ]]; then
     totalVideoCards="None Accelerated"
   fi
 
-  echo "\"$totalThreads Threads\",\"$totalRam GB RAM\",\"$totalVideoCards GPU(s)\",\"$totalDisks Disk(s)\""
+  echo $(jq -n \
+          --arg cpuThreads "$totalThreads" \
+          --arg totalRam "$totalRam GB" \
+          --arg gpu "$totalVideoCards" \
+          --arg storage "$totalDisks" \
+           '$ARGS.named')
 }
 
 bsysinfo

@@ -13,40 +13,74 @@ function cachedResource()
   local resourceResolvedLocation=$1
   local resourceLocation=$2
   local cacheLocation=$3
-
-  local resourcePackage="$resourceResolvedLocation.tar.gz"
+  local resourcePackage="$resourceResolvedLocation/barchive.tar.gz"
+  local checksumPackage="$resourceResolvedLocation/barchive.checksum"
   local targetCacheLocation="$cacheLocation/$resourceLocation"
   local trackingName=$(echo "$resourceLocation" | sed 's/\//|/g')
   local cacheTracking="$cacheLocation/resources/$trackingName"
 
   if [ -n "$cacheLocation" ] && [ -f "$resourcePackage" ]; then
+    local resourceUnpackingDirectory="$targetCacheLocation.unpacking"
+    local resourceUnpackingLock="$resourceUnpackingDirectory/unpacking.lock"
+
+    local runExtraction=1
+    if [ -d "$targetCacheLocation" ]; then
+      runExtraction=0
     # wait for it in case there is already an unpacking going on or if the cache already exists
-    if [ -d "$resourcePackage.unpacking" ] || [ -d "$targetCacheLocation" ]; then
-      while [ -d "$resourcePackage.unpacking" ]
+    elif [ -d "$resourceUnpackingDirectory" ]; then
+      runExtraction=0
+
+      if [[ ! -z "$BACKBONE_RESOURCE_LOADER_VERBOSE_BEGIN" ]]; then
+	>&2 echo "$BACKBONE_RESOURCE_LOADER_VERBOSE_BEGIN $resourceLocation"
+      fi
+
+      >&2 echo "Waiting for unpacking (started by another process): $resourceLocation"
+      while [ -d "$resourceUnpackingDirectory" ]
       do
-	sleep 0.1
+	sleep 2.0
+	if [ -f $resourceUnpackingLock ]; then
+	  if test $(find "$resourceUnpackingLock" -mmin +1)
+	  then
+	      >&2 echo "Previous unpacking failed, starting over..."
+	      runExtraction=1
+	      break
+	  fi
+	else
+	  >&2 echo "Previous unpacking is corrupted, starting over..."
+	  runExtraction=1
+	  break
+	fi
       done
 
-      # returning cached location
-      echo "$targetCacheLocation"
+      if [[ ! -z "$BACKBONE_RESOURCE_LOADER_VERBOSE_END" ]]; then
+	>&2 echo "$BACKBONE_RESOURCE_LOADER_VERBOSE_END $resourceLocation"
+      fi
+    else
+      mkdir -p "$resourceUnpackingDirectory"
+    fi
 
     # unpacking resource
-    else
-      # resolving cache as software user, so any file created by the cache
-      # is going to have the proper user
-      if [ -n "$BACKBONE_SOFTWARE_USER" ]; then
-	local currentDir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-	echo $(su $BACKBONE_SOFTWARE_USER -c ./$currentDir/ures "$resourcePackage" "$resourceLocation" "$cacheLocation" "$cacheTracking")
-      else
-	echo $(ures "$resourcePackage" "$resourceLocation" "$cacheLocation" "$cacheTracking")
+    if [[ $runExtraction == 1 ]]; then
+      if [[ ! -z "$BACKBONE_RESOURCE_LOADER_VERBOSE_BEGIN" ]]; then
+	>&2 echo "$BACKBONE_RESOURCE_LOADER_VERBOSE_BEGIN $resourceLocation"
       fi
+
+      echo $(ures "$resourcePackage" "$checksumPackage" "$resourceLocation" "$cacheLocation" "$cacheTracking" "$resourceUnpackingDirectory" "$resourceUnpackingLock")
+
+      if [[ ! -z "$BACKBONE_RESOURCE_LOADER_VERBOSE_END" ]]; then
+	>&2 echo "$BACKBONE_RESOURCE_LOADER_VERBOSE_END $resourceLocation"
+      fi
+
+    # otherwise returning the location for the cached resource
+    else
+      echo "$targetCacheLocation"
     fi
 
     # updating the time in the file that keeps tracking from the cached resource.
     # (later used to purge resources that are no longer in usage)
     touch "$cacheTracking"
 
-  # otherwise if there is no data-package we return the original resolved location location
+  # otherwise if there is no data-package we return the original resolved location
   else
     echo "$resourceResolvedLocation"
   fi
