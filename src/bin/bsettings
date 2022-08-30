@@ -4,6 +4,7 @@ import os
 import re
 import sys
 import json
+import shutil
 import subprocess
 from PySide2 import QtCore, QtWidgets, QtGui
 
@@ -35,14 +36,34 @@ class BackboneSettingsDialog(QtWidgets.QDialog):
 
         # hard drives
         self.__cache = QtWidgets.QComboBox()
-        for driveLetter in self.hardDrives():
-            self.__cache.addItem(os.path.join(driveLetter, settings['cache'][2:]).replace('\\', '/'))
+        self.__cacheLocations = []
+        useDriveIndex = 0
+        largestFreeSpace = 0
+        for driveIndex, driveLetter in enumerate(self.hardDrives()):
+            cacheLocation = os.path.join(driveLetter, settings['cache'][2:]).replace('\\', '/')
+            totalBytes, usedBytes, freeBytes = shutil.disk_usage(driveLetter)
+            if freeBytes > largestFreeSpace and not settings['user'] or \
+                    settings['user'] and cacheLocation == settings['cache']:
+                useDriveIndex = driveIndex
+                largestFreeSpace = freeBytes
+
+            cacheLocationLabel = '{} (Size: {} GB, Free: {} GB)'.format(
+                cacheLocation,
+                int(totalBytes / 1000 ** 3),
+                int(freeBytes / 1000 ** 3),
+            )
+
+            self.__cache.addItem(cacheLocationLabel)
+            self.__cacheLocations.append(cacheLocation)
+
+        self.__cache.setCurrentIndex(useDriveIndex)
         self.__cache.setCurrentText(settings['cache'].replace('\\', '/'))
 
         layout = QtWidgets.QVBoxLayout()
         basicGroup = QtWidgets.QGroupBox('Basic Settings')
         basicLayout = QtWidgets.QFormLayout()
         basicLayout.addRow('Username (firstName.lastName)', self.__userName)
+        basicLayout.addRow('Cache Location', self.__cache)
         basicGroup.setLayout(basicLayout)
 
         advancedGroup = QtWidgets.QGroupBox('Advanced Settings (Caution invalid settings can break the system)')
@@ -51,7 +72,6 @@ class BackboneSettingsDialog(QtWidgets.QDialog):
         pipeSettingsLabel.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
         advancedLayout.addRow('Pipe settings', pipeSettingsLabel)
         advancedLayout.addRow('Release Type', self.__releaseType)
-        advancedLayout.addRow('Cache Location', self.__cache)
         advancedLayout.addRow('Root', self.__root)
         advancedLayout.addRow('Dev Root', self.__devRoot)
         advancedLayout.addRow('Core Config', self.__coreConfig)
@@ -167,7 +187,7 @@ class BackboneSettingsDialog(QtWidgets.QDialog):
         """
         settings = self.settings()
         settings['user'] = self.__userName.text()
-        settings['cache'] = self.__cache.currentText()
+        settings['cache'] = self.__cacheLocations[self.__cache.currentIndex()]
         settings['root'] = self.__root.text().replace('\\', '/')
         settings['devRoot'] = self.__devRoot.text().replace('\\', '/')
         settings['release'] = self.__releaseType.currentText()
