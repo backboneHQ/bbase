@@ -123,7 +123,7 @@ else
       do
         # looking for baked versions
         if [[ ! -z "$BACKBONE_ACTIVE_VERSIONS_CONFIG" ]]; then
-          coreVersionValue=$(cat $BACKBONE_ACTIVE_VERSIONS_CONFIG | jq -r ".data.\"${coreDirectory[$coreKind]}/$core\".$autoAssignType.version")
+          coreVersionValue=$(cat $BACKBONE_ACTIVE_VERSIONS_CONFIG | jq -r ".data.\"${coreDirectory[$coreKind]}/$core\".$bashVersionType.version")
           if [[ $coreVersionValue == "null" ]]; then
             coreVersionValue=""
           fi
