@@ -102,6 +102,12 @@ class BackboneSettingsDialog(QtWidgets.QDialog):
         commandOutput = cls.__runSubProcessCommand('wmic volume list brief')
         for index, line in enumerate(commandOutput[::-1]):
             parts = list(filter(lambda x: len(x), line.split(' ')))
+
+            # skipping any unmounted drive
+            if len(parts) < 3:
+                continue
+
+            # skipping any drive that is not NTFS
             driveType = parts[2]
             if driveType != 'NTFS':
                 continue
