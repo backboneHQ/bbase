@@ -210,7 +210,7 @@ class BackboneSettingsDialog(QtWidgets.QDialog):
         return list(
             filter(lambda x: len(x), map(str.strip, subprocess.check_output(
                 command
-            ).decode('utf-8').replace('\r', '').split('\n')))
+            ).decode('utf-8', 'ignore').replace('\r', '').split('\n')))
         )
 
 if __name__ == '__main__':
