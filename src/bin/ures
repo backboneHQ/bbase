@@ -44,8 +44,14 @@ function unpackResource()
   local copiedPackageResource=""
   if [ -f $resourceChecksum ]; then
     copiedPackageResource="$cacheUnpackingDirectory/$(basename $resourcePackage)"
-    command cp $resourcePackage $copiedPackageResource &
-    pid=$!
+    if [[ -z "$BACKBONE_URES_BLOCK_SIZE" ]]; then
+      command cp $resourcePackage $copiedPackageResource &
+      pid=$!
+    else
+      command dd if=$resourcePackage of=$copiedPackageResource bs=$BACKBONE_URES_BLOCK_SIZE status=none &
+      pid=$!
+    fi
+
     local totalLabel=$(echo $resourceSize | numfmt --to=iec --format='%.2fB')
     local currentProgressInterval="0"
     local currentProgressTotal="0"
