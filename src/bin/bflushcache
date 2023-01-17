@@ -1,0 +1,98 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import shutil
+import datetime
+import argparse
+import traceback
+
+def _purgeResource(cacheLocationPath, resourceRelativePath, resourceTrackingFullPath):
+    """
+    Purge a cached resource from backbone.
+    """
+    resourceCacheDataFullPath = os.path.join(cacheLocationPath, resourceRelativePath)
+    resourceCacheDataFlushFullPath = resourceCacheDataFullPath + '_purge'
+
+    # trying to remove a left over (interrupted at the middle of the process)
+    if os.path.exists(resourceCacheDataFlushFullPath):
+        shutil.rmtree(resourceCacheDataFlushFullPath, ignore_errors=True)
+
+        if not os.path.exists(resourceCacheDataFullPath):
+            os.remove(resourceTrackingFullPath)
+            return
+
+    # broken cache (cache directory that has been removed manually)
+    if not os.path.exists(resourceCacheDataFullPath):
+        os.remove(resourceTrackingFullPath)
+        return
+
+    # otherwise, removing active resource
+    try:
+        os.rename(resourceCacheDataFullPath, resourceCacheDataFlushFullPath)
+    except Exception:
+        pass
+    else:
+        shutil.rmtree(resourceCacheDataFlushFullPath, ignore_errors=True)
+
+    if os.path.exists(resourceCacheDataFullPath) or os.path.exists(resourceCacheDataFlushFullPath):
+        sys.stderr.write('Failed to remove: {}\n'.format(resourceRelativePath))
+        sys.stderr.flush()
+    else:
+        os.remove(resourceTrackingFullPath)
+
+def _flushCache(lifeSpanDays=30, purge=False):
+    """
+    Detect and purge (if enabled) cached resources that have exceeded their lifespan.
+    """
+    cacheLocationPath = os.environ['BACKBONE_CACHE']
+    cacheResourcesPath = os.path.join(cacheLocationPath, 'resources')
+    if not (cacheLocationPath and os.path.exists(cacheLocationPath) and os.path.exists(cacheResourcesPath)):
+        raise Exception('Invalid backbone cache: {}'.format(cacheLocationPath))
+
+    title = 'Removing from cache (no longer in use)' if purge else 'No longer in use'
+    lifespanDate = datetime.date.today() + datetime.timedelta(-lifeSpanDays)
+    for resourceName in os.listdir(cacheResourcesPath):
+        resourceTrackingFullPath = os.path.join(cacheResourcesPath, resourceName)
+
+        # skipping invalid resources
+        if '|' not in resourceName or len(resourceName) < 3 or resourceName.startswith('|') or not os.path.isfile(resourceTrackingFullPath):
+            continue
+
+        # checking if the resource is in usage. Skipping it when that is the case.
+        if lifespanDate < datetime.datetime.fromtimestamp(os.path.getmtime(resourceTrackingFullPath)).date():
+            continue
+
+        # notifying about non active resource
+        resourceRelativePath = resourceName.replace('|', '/')
+        sys.stdout.write('{}: {}\n'.format(title, resourceRelativePath))
+        sys.stdout.flush()
+
+        # purging resource (when purge is enabled)
+        if purge:
+            try:
+                _purgeResource(cacheLocationPath, resourceRelativePath, resourceTrackingFullPath)
+            except Exception:
+                traceback.print_exc(file=sys.stderr)
+
+
+# initialize parser
+parser = argparse.ArgumentParser()
+
+parser.add_argument(
+    'lifespan',
+    type=int,
+    help='Number of days that a cached resource should stay alive'
+)
+
+parser.add_argument(
+    '-p',
+    '--purge',
+    action='store_true',
+    required=False,
+    help='Purge the cached resources that have exceeded their lifespan. Otherwise, only print them.'
+)
+
+if __name__ == '__main__':
+    args = parser.parse_args()
+    _flushCache(args.lifespan, args.purge)
