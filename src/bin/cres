@@ -82,6 +82,18 @@ function cachedResource()
     # (later used to purge resources that are no longer in usage)
     touch "$cacheTracking"
 
+  # in case the resolved location is already under the cache we return it right away
+  # but, making sure to touch the cache tracking
+  elif [[ "$resourceResolvedLocation" == $cacheLocation* ]]; then
+    # updating the time in the file that keeps tracking from the cached resource.
+    # (later used to purge resources that are no longer in usage)
+    if [[ ! -d "$(dirname $cacheTracking)" ]]; then
+      mkdir -p $(dirname $cacheTracking)
+    fi
+    touch "$cacheTracking"
+
+    echo "$resourceResolvedLocation"
+
   # otherwise if there is no data-package we return the original resolved location
   else
     echo "$resourceResolvedLocation"
