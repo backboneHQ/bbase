@@ -129,8 +129,28 @@ function unpackResource()
   command rm $cacheUnpackingLock
   command rm $extractionCopyChecksum
 
-  # when unpacking is done we rename it to be available atomically
-  command mv "$cacheUnpackingDirectory" "$targetCacheLocation"
+  # when extracting lot of files it could happen that a process may start
+  # scanning the contents of the directory. Therefore, not letting to rename
+  # it. Because of that we are giving 5 minutes of attempts to rename the
+  # directory.
+  maxAttempts=20
+  for i in $(seq 1 $maxAttempts)
+  do
+    # when unpacking is done we rename it to be available atomically
+    command mv "$cacheUnpackingDirectory" "$targetCacheLocation" >& /dev/null
+    result=$?
+
+    if [[ $result -eq 0 ]]
+    then
+      break
+    else
+      sleep 15
+    fi
+  done
+
+  if [[ -d "$cacheUnpackingDirectory" ]]; then
+    >&2 echo "Failed to rename $cacheUnpackingDirectory to $targetCacheLocation"
+  fi
 
   echo $targetCacheLocation
 }
